@@ -1449,6 +1449,7 @@ jQuery(function ($) {
                 const translation = translations[index];
                 if (translation.item && translation.item.text) {
                     // If we have elementPath, use it to directly update the value
+                    console.log(translation);
                     if (translation.item.elementPath) {
                         translatedElementor = updateElementorByPath(
                             translatedElementor,
@@ -1722,7 +1723,15 @@ jQuery(function ($) {
                         // Original had HTML - preserve HTML structure from Google Translate
                         // Clean up any Google Translate wrapper elements
                         const $temp = $('<div>').html(translatedHtml);
+                        
+                        // Remove Google Translate wrapper elements (these don't contain content we need)
                         $temp.find('.goog-te-spinner-pos, .goog-te-banner-frame, .skiptranslate, .goog-te-banner').remove();
+                        
+                        // Unwrap font tags (remove tag but keep content)
+                        $temp.find('font[dir="auto"], font[style*="vertical-align: inherit"]').each(function() {
+                            const $font = $(this);
+                            $font.replaceWith($font.contents());
+                        });
                         
                         const cleanHtml = $temp.html();
                         
@@ -1740,7 +1749,6 @@ jQuery(function ($) {
         });
 
         if (hasUpdates) {
-            console.log('Translations extracted from Google Translate widget');
             // Enable save buttons when translations are updated
             updateSaveButtonState();
         }
