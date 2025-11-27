@@ -727,13 +727,14 @@ jQuery(function ($) {
             const rowNum = index + 1;
             const $row = $('<tr>');
             const escapedSourceText = $('<div>').text(item.text).html();
-            
             // Get HTML content if available, otherwise use plain text
             let sourceHtml = escapedSourceText;
             if (item.html && item.html !== item.text) {
                 sourceHtml = item.html;
             }
-
+            if(item.settingValue && item.settingValue !== item.text) {
+                sourceHtml = item.settingValue;
+            }
             $row.append('<td style="padding:12px; border:1px solid #ddd;">' + rowNum + '</td>');
             $row.append('<td class="' + CLASSES.sourceText + '" style="padding:12px; border:1px solid #ddd; background:#f9f9f9;">' + sourceHtml + '</td>');
             
@@ -1136,6 +1137,91 @@ jQuery(function ($) {
     }
 
     /**
+     * Update Elementor element using elementPath to directly locate and update the value
+     * @param {Array} elements - Elementor elements array
+     * @param {string} elementPath - Path to the element (e.g., "0.elements.0.settings.title" or "0.settings.key[0].repeaterKey")
+     * @param {string} translatedText - Translated text to set
+     * @returns {Array} - Updated elements array
+     */
+    function updateElementorByPath(elements, elementPath, translatedText) {
+        if (!Array.isArray(elements) || !elementPath) {
+            return elements;
+        }
+        
+        // Handle repeater fields with array notation like "key[0].repeaterKey"
+        // Split by '.' but preserve array notation like "key[0]"
+        const pathParts = [];
+        let currentPart = '';
+        let inBrackets = false;
+        
+        for (let i = 0; i < elementPath.length; i++) {
+            const char = elementPath[i];
+            if (char === '[') {
+                inBrackets = true;
+                currentPart += char;
+            } else if (char === ']') {
+                inBrackets = false;
+                currentPart += char;
+            } else if (char === '.' && !inBrackets) {
+                if (currentPart) {
+                    pathParts.push(currentPart);
+                    currentPart = '';
+                }
+            } else {
+                currentPart += char;
+            }
+        }
+        if (currentPart) {
+            pathParts.push(currentPart);
+        }
+        
+        let current = elements;
+        
+        // Navigate through the path
+        for (let i = 0; i < pathParts.length; i++) {
+            const part = pathParts[i];
+            
+            // Check if this part is an array index
+            if (/^\d+$/.test(part)) {
+                const index = parseInt(part, 10);
+                if (Array.isArray(current) && current[index] !== undefined) {
+                    current = current[index];
+                } else {
+                    return elements; // Path invalid
+                }
+            } else if (part === 'settings' && current.settings) {
+                current = current.settings;
+            } else if (part === 'elements' && current.elements) {
+                current = current.elements;
+            } else if (part.indexOf('[') !== -1) {
+                // Handle repeater fields like "key[0]"
+                const match = part.match(/^([^\[]+)\[(\d+)\]$/);
+                if (match) {
+                    const arrayKey = match[1];
+                    const arrayIndex = parseInt(match[2], 10);
+                    if (current[arrayKey] && Array.isArray(current[arrayKey]) && current[arrayKey][arrayIndex] !== undefined) {
+                        current = current[arrayKey][arrayIndex];
+                    } else {
+                        return elements; // Path invalid
+                    }
+                }
+            } else if (i === pathParts.length - 1) {
+                // Last part - this is the property to update
+                if (typeof current === 'object' && current !== null) {
+                    current[part] = translatedText;
+                    return elements; // Successfully updated
+                }
+            } else if (current[part]) {
+                current = current[part];
+            } else {
+                return elements; // Path invalid
+            }
+        }
+        
+        return elements;
+    }
+
+    /**
      * Recursively update Elementor elements with translated text
      */
     function updateElementorWithTranslation(elements, originalText, translatedText) {
@@ -1175,24 +1261,44 @@ jQuery(function ($) {
                     if (typeof value === 'string' && value.trim()) {
                         const tempDiv = $('<div>').html(value);
                         const settingText = tempDiv.text().trim();
-                        const originalTrimmed = originalText.trim();
+                        
+                        // Extract plain text from originalText if it contains HTML
+                        const originalTempDiv = $('<div>').html(originalText);
+                        const originalPlainText = originalTempDiv.text().trim();
+                        const originalHasHTML = /<[^>]+>/.test(originalText);
+                        const originalTextForMatch = originalHasHTML ? originalPlainText : originalText.trim();
+                        
+                        // Check if the actual value matches the original value (exact match)
+                        // This handles cases where settingValue is the exact same as the Elementor value
+                        const valueMatchesOriginal = value === originalText || value.trim() === originalText.trim();
                         
                         // If the setting text matches, replace it
-                        if (settingText === originalTrimmed) {
+                        if (settingText === originalTextForMatch || valueMatchesOriginal) {
                             if (value !== settingText) {
                                 // Contains HTML - use HTML replacement
-                                updatedElement.settings[key] = replaceTextInHTML(value, originalText, translatedText);
+                                // If original was HTML and translated is HTML, use translated directly
+                                const translatedHasHTML = /<[^>]+>/.test(translatedText);
+                                if (originalHasHTML && translatedHasHTML) {
+                                    updatedElement.settings[key] = translatedText;
+                                } else {
+                                    updatedElement.settings[key] = replaceTextInHTML(value, originalText, translatedText);
+                                }
                             } else {
                                 // Plain text - simple replacement
                                 updatedElement.settings[key] = translatedText;
                             }
-                        } else if (settingText.indexOf(originalTrimmed) !== -1) {
+                        } else if (settingText.indexOf(originalTextForMatch) !== -1) {
                             // Partial match
                             if (value !== settingText) {
-                                updatedElement.settings[key] = replaceTextInHTML(value, originalText, translatedText);
+                                const translatedHasHTML = /<[^>]+>/.test(translatedText);
+                                if (originalHasHTML && translatedHasHTML) {
+                                    updatedElement.settings[key] = replaceTextInHTML(value, originalText, translatedText);
+                                } else {
+                                    updatedElement.settings[key] = replaceTextInHTML(value, originalText, translatedText);
+                                }
                             } else {
                                 updatedElement.settings[key] = value.replace(
-                                    new RegExp(originalTrimmed.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
+                                    new RegExp(originalTextForMatch.replace(/[.*+?^${}()|[\]\\]/g, '\\$&'), 'g'),
                                     translatedText
                                 );
                             }
@@ -1342,14 +1448,25 @@ jQuery(function ($) {
             Object.keys(translations).forEach(function(index) {
                 const translation = translations[index];
                 if (translation.item && translation.item.text) {
-                    translatedElementor = updateElementorWithTranslation(
-                        translatedElementor,
-                        translation.item.text,
-                        translation.text
-                    );
+                    // If we have elementPath, use it to directly update the value
+                    if (translation.item.elementPath) {
+                        translatedElementor = updateElementorByPath(
+                            translatedElementor,
+                            translation.item.elementPath,
+                            translation.text
+                        );
+                    } else {
+                        // Fallback to text matching if no elementPath
+                        const originalValue = translation.item.settingValue || translation.item.text;
+                        translatedElementor = updateElementorWithTranslation(
+                            translatedElementor,
+                            originalValue,
+                            translation.text
+                        );
+                    }
                 }
             });
-
+            
             translatedContent = JSON.stringify(translatedElementor);
         } else if (editorType === 'block') {
             // Handle block editor

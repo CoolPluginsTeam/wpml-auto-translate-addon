@@ -131,10 +131,24 @@ class WPML_AT_Translator {
 		$translated_content = WPML_AT_Helper::decode_unicode_escapes( $translated_content );
 
 		if ( 'elementor' === $editor_type && ! empty( $translated_content ) ) {
+			// Decode the JSON string to array
 			$decoded_elementor = json_decode( wp_unslash( $translated_content ), true );
+			
+			// If first decode failed, try without wp_unslash
+			if ( ! is_array( $decoded_elementor ) ) {
+				$decoded_elementor = json_decode( $translated_content, true );
+			}
+			
+			// If still not an array, try with stripslashes
+			if ( ! is_array( $decoded_elementor ) ) {
+				$decoded_elementor = json_decode( stripslashes( $translated_content ), true );
+			}
+			
+			// Keep as array for Elementor API (will be encoded in save_elementor_data if needed)
 			if ( is_array( $decoded_elementor ) ) {
-				$elementor_data = wp_json_encode( $decoded_elementor, JSON_UNESCAPED_UNICODE );
+				$elementor_data = $decoded_elementor; // Keep as array for Elementor API
 			} else {
+				// Fallback: try to use as JSON string
 				$elementor_data = wp_unslash( $translated_content );
 			}
 			$translated_body = '';
@@ -262,15 +276,61 @@ class WPML_AT_Translator {
 	 * Save Elementor data for a post.
 	 *
 	 * @param int    $post_id        Post ID.
-	 * @param string $elementor_data JSON encoded Elementor data.
+	 * @param mixed  $elementor_data Elementor data (array or JSON string).
 	 */
 	private function save_elementor_data( $post_id, $elementor_data ) {
-		if ( ! empty( $elementor_data ) ) {
-			update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
-			update_post_meta( $post_id, '_elementor_data', $elementor_data );
-			update_post_meta( $post_id, '_elementor_version', defined( 'ELEMENTOR_VERSION' ) ? ELEMENTOR_VERSION : '0.0.0' );
-			update_post_meta( $post_id, '_elementor_pro_version', defined( 'ELEMENTOR_PRO_VERSION' ) ? ELEMENTOR_PRO_VERSION : '0.0.0' );
+		if ( empty( $elementor_data ) ) {
+			return;
 		}
+
+		// Ensure we have an array
+		$decoded_elementor = $elementor_data;
+		if ( ! is_array( $decoded_elementor ) ) {
+			// Try to decode if it's a JSON string
+			$decoded_elementor = json_decode( wp_unslash( $elementor_data ), true );
+			
+			if ( ! is_array( $decoded_elementor ) ) {
+				$decoded_elementor = json_decode( $elementor_data, true );
+			}
+			
+			if ( ! is_array( $decoded_elementor ) ) {
+				$decoded_elementor = json_decode( stripslashes( $elementor_data ), true );
+			}
+		}
+
+		// Check if Elementor Plugin exists and use its API (like autopoly does)
+		if ( class_exists( '\Elementor\Plugin' ) && property_exists( '\Elementor\Plugin', 'instance' ) ) {
+			$plugin = \Elementor\Plugin::$instance;
+			
+			// Get the document
+			$document = $plugin->documents->get( $post_id );
+			
+			if ( $document && is_array( $decoded_elementor ) ) {
+				// Use Elementor's save method to properly save the data (same as autopoly)
+				$document->save( array(
+					'elements' => $decoded_elementor,
+				) );
+				
+				// Clear Elementor cache (same as autopoly)
+				$plugin->files_manager->clear_cache();
+				
+				return;
+			}
+		}
+
+		// Fallback: Save directly to post meta if Elementor API is not available
+		update_post_meta( $post_id, '_elementor_edit_mode', 'builder' );
+		
+		// Ensure proper JSON encoding for post meta
+		if ( is_array( $decoded_elementor ) ) {
+			$elementor_json = wp_json_encode( $decoded_elementor, JSON_UNESCAPED_UNICODE );
+		} else {
+			$elementor_json = is_string( $elementor_data ) ? $elementor_data : wp_json_encode( $elementor_data );
+		}
+		
+		update_post_meta( $post_id, '_elementor_data', $elementor_json );
+		update_post_meta( $post_id, '_elementor_version', defined( 'ELEMENTOR_VERSION' ) ? ELEMENTOR_VERSION : '0.0.0' );
+		update_post_meta( $post_id, '_elementor_pro_version', defined( 'ELEMENTOR_PRO_VERSION' ) ? ELEMENTOR_PRO_VERSION : '0.0.0' );
 	}
 
 	/**
