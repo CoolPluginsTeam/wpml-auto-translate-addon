@@ -402,7 +402,7 @@ jQuery(function ($) {
             if (block.innerHTML) {
                 const tempDiv = $('<div>').html(block.innerHTML);
                 // Find all text-containing elements
-                const textElements = tempDiv.find('p, h1, h2, h3, h4, h5, h6, li, span, div, blockquote, pre');
+                const textElements = tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg');
                 
                 if (textElements.length > 0) {
                     // Extract each element as separate string
@@ -459,7 +459,7 @@ jQuery(function ($) {
                     if (typeof content === 'string' && content.trim()) {
                         const tempDiv = $('<div>').html(content);
                         // Find all text-containing elements
-                        const textElements = tempDiv.find('p, h1, h2, h3, h4, h5, h6, li, span, div, blockquote, pre');
+                        const textElements = tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg');
                         
                         if (textElements.length > 0) {
                             // Extract each element as separate string
@@ -693,20 +693,83 @@ jQuery(function ($) {
                 extractTextFromBlocks(postData.original_content, contentItems);
             } else if (typeof postData.original_content === 'string') {
                 const tempDiv = $('<div>').html(postData.original_content);
-                const paragraphs = tempDiv.find('p, h1, h2, h3, h4, h5, h6, li, div');
-
-                if (paragraphs.length > 0) {
-                    paragraphs.each(function() {
-                        const text = $(this).text().trim();
-                        if (text) {
-                            contentItems.push({
-                                type: 'content',
-                                text: text,
-                                html: $(this).html()
-                            });
+                const allElements = tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg');
+                
+                // Extract all text-containing elements, processing from outermost to innermost
+                // If a parent element is extracted, skip its children to avoid duplicates
+                const processedElements = new Set();
+                const elementsArray = allElements.toArray();
+                
+                // Process from outermost to innermost (normal order, not reversed)
+                elementsArray.forEach(function(elem) {
+                    // Skip if this element or any of its ancestors was already processed
+                    let shouldSkip = false;
+                    let $checkElem = $(elem);
+                    
+                    // Check if any ancestor was already processed
+                    while ($checkElem.length && $checkElem[0] !== tempDiv[0]) {
+                        if (processedElements.has($checkElem[0])) {
+                            shouldSkip = true;
+                            break;
                         }
+                        $checkElem = $checkElem.parent();
+                    }
+                    
+                    if (shouldSkip) {
+                        return; // Skip this element
+                    }
+                    
+                    const $elem = $(elem);
+                    const elemText = $elem.text().trim();
+                    
+                    if (!elemText) {
+                        return; // Skip elements with no text
+                    }
+                    
+                    // Check if element has text-containing children
+                    const textChildren = $elem.children().not('script, style, noscript, iframe, object, embed, svg').filter(function() {
+                        return $(this).text().trim().length > 0;
                     });
-                } else {
+                    
+                    if (textChildren.length === 0) {
+                        // Leaf element - always include
+                        processedElements.add(elem);
+                        const outerHtml = $('<div>').append($elem.clone()).html();
+                        contentItems.push({
+                            type: 'content',
+                            text: elemText,
+                            html: outerHtml
+                        });
+                        return;
+                    }
+                    
+                    // For parent elements, check if their text is just the sum of children's text
+                    const childrenText = textChildren.map(function() {
+                        return $(this).text().trim();
+                    }).get().join('').trim();
+                    
+                    // Include if element has direct text (not just from children)
+                    // or if the text differs from children's concatenated text
+                    const directText = $elem.contents().filter(function() {
+                        return this.nodeType === 3 && $(this).text().trim().length > 0;
+                    });
+                    
+                    if (directText.length > 0 || elemText !== childrenText) {
+                        // Include this parent element and mark it as processed
+                        // This will cause its children to be skipped
+                        processedElements.add(elem);
+                        const outerHtml = $('<div>').append($elem.clone()).html();
+                        contentItems.push({
+                            type: 'content',
+                            text: elemText,
+                            html: outerHtml
+                        });
+                    }
+                });
+                
+                // Only use fallback if no elements were extracted
+                if (contentItems.length === 0) {
+                    // No structured elements, try splitting by paragraphs
                     const parts = postData.original_content.split(/\n\n+/);
                     parts.forEach(function(part) {
                         const text = $('<div>').html(part).text().trim();
@@ -735,13 +798,30 @@ jQuery(function ($) {
             if(item.settingValue && item.settingValue !== item.text) {
                 sourceHtml = item.settingValue;
             }
-            $row.append('<td style="padding:12px; border:1px solid #ddd;">' + rowNum + '</td>');
-            $row.append('<td class="' + CLASSES.sourceText + '" style="padding:12px; border:1px solid #ddd; background:#f9f9f9;">' + sourceHtml + '</td>');
+            
+            // Create cells using jQuery to properly insert HTML
+            const $numCell = $('<td>').css({'padding': '12px', 'border': '1px solid #ddd'}).text(rowNum);
+            const $sourceCell = $('<td>').addClass(CLASSES.sourceText).css({'padding': '12px', 'border': '1px solid #ddd', 'background': '#f9f9f9'});
+            $sourceCell.html(sourceHtml); // Use .html() to properly insert HTML
+            
+            $row.append($numCell);
+            $row.append($sourceCell);
             
             // Translation cell
-            const $translationCell = $('<td style="padding:12px; border:1px solid #ddd; position:relative;"></td>');
-            const $translationTarget = $('<div translate="yes" class="' + CLASSES.translationTarget + '" data-type="' + item.type + '" data-index="' + index + '" style="position:absolute; top:0; left:0; width:100%; height:100%; opacity:0; pointer-events:none; z-index:-1;"></div>').html(sourceHtml);
-            const $translationField = $('<div class="' + CLASSES.translationField + ' target" data-type="' + item.type + '" data-index="' + index + '" style="padding:8px; font-family:inherit; font-size:14px; background:#fff;"></div>').html(sourceHtml);
+            const $translationCell = $('<td>').css({'padding': '12px', 'border': '1px solid #ddd', 'position': 'relative'});
+            const $translationTarget = $('<div>')
+                .attr('translate', 'yes')
+                .addClass(CLASSES.translationTarget)
+                .attr('data-type', item.type)
+                .attr('data-index', index)
+                .css({'position': 'absolute', 'top': '0', 'left': '0', 'width': '100%', 'height': '100%', 'opacity': '0', 'pointer-events': 'none', 'z-index': '-1'})
+                .html(sourceHtml);
+            const $translationField = $('<div>')
+                .addClass(CLASSES.translationField + ' target')
+                .attr('data-type', item.type)
+                .attr('data-index', index)
+                .css({'padding': '8px', 'font-family': 'inherit', 'font-size': '14px', 'background': '#fff'})
+                .html(sourceHtml);
             
             $translationCell.append($translationTarget);
             $translationCell.append($translationField);
@@ -829,7 +909,7 @@ jQuery(function ($) {
             let found = false;
             
             // First, try to find leaf elements (elements with no text-containing children)
-            tempDiv.find('*').each(function() {
+            tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg').each(function() {
                 if (found) return false; // Break if already found
                 
                 const $elem = $(this);
@@ -839,7 +919,7 @@ jQuery(function ($) {
                 // Check if this element's text matches exactly
                 if (elemText === originalTrimmed) {
                     // Check if this element has no child elements with text (leaf element)
-                    const hasTextChildren = $elem.find('*').filter(function() {
+                    const hasTextChildren = $elem.find('*').not('script, style, noscript, iframe, object, embed, svg').filter(function() {
                         return $(this).text().trim().length > 0;
                     }).length > 0;
                     
@@ -858,7 +938,7 @@ jQuery(function ($) {
             
             // Strategy 2: Try to match by HTML structure if available
             // Find elements that might contain the text and replace their innerHTML
-            tempDiv.find('p, h1, h2, h3, h4, h5, h6, li, span, div, strong, em, b, i, a').each(function() {
+            tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg').each(function() {
                 if (found) return false; // Break if already found
                 
                 const $elem = $(this);
@@ -1009,7 +1089,7 @@ jQuery(function ($) {
                         const normalizedOriginalHtml = originalHtml.replace(/\s+/g, ' ').trim();
                         
                         // Try to find an element whose HTML matches the original
-                        tempDiv.find('*').each(function() {
+                        tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg').each(function() {
                             if (replaced) return false; // Break if already replaced
                             
                             const $elem = $(this);
@@ -1038,7 +1118,7 @@ jQuery(function ($) {
                     // If HTML matching didn't work, try text-based matching
                     if (!replaced) {
                         // First try to find leaf elements (elements with no text-containing children)
-                        tempDiv.find('*').each(function() {
+                        tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg').each(function() {
                             if (replaced) return false; // Break if already replaced
                             
                             const $elem = $(this);
@@ -1046,7 +1126,7 @@ jQuery(function ($) {
                             
                             if (elemText === originalTrimmed) {
                                 // Check if this element has no child elements with text (leaf element)
-                                const hasTextChildren = $elem.find('*').filter(function() {
+                                const hasTextChildren = $elem.find('*').not('script, style, noscript, iframe, object, embed, svg').filter(function() {
                                     return $(this).text().trim().length > 0;
                                 }).length > 0;
                                 
@@ -1070,7 +1150,7 @@ jQuery(function ($) {
                         
                         // If still not replaced, try common block elements
                         if (!replaced) {
-                            tempDiv.find('p, h1, h2, h3, h4, h5, h6, li, span, div, blockquote, pre, strong, em, a, b, i').each(function() {
+                            tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg').each(function() {
                                 if (replaced) return false; // Break if already replaced
                                 
                                 const $elem = $(this);
@@ -1116,7 +1196,60 @@ jQuery(function ($) {
             if (Array.isArray(updatedBlock.innerContent)) {
                 updatedBlock.innerContent = updatedBlock.innerContent.map(function(content) {
                     if (typeof content === 'string') {
-                        return replaceTextInHTML(content, originalText, translatedText);
+                        const tempDiv = $('<div>').html(content);
+                        const contentText = tempDiv.text().trim();
+                        const originalTrimmed = originalText.trim();
+                        const cleanTranslatedText = translatedText;
+                        
+                        // Check if this innerContent string contains the text we're looking for
+                        if (contentText.indexOf(originalTrimmed) !== -1) {
+                            let replaced = false;
+                            
+                            // Process from innermost to outermost to match leaf elements first
+                            const allElements = tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg').toArray().reverse();
+                            
+                            allElements.forEach(function(elem) {
+                                if (replaced) return;
+                                
+                                const $elem = $(elem);
+                                const elemText = $elem.text().trim();
+                                
+                                if (elemText === originalTrimmed) {
+                                    // Check if this is a leaf element
+                                    const hasTextChildren = $elem.find('*').not('script, style, noscript, iframe, object, embed, svg').filter(function() {
+                                        return $(this).text().trim().length > 0;
+                                    }).length > 0;
+                                    
+                                    if (!hasTextChildren) {
+                                        // Check if translated text contains HTML tags
+                                        const $translatedDiv = $('<div>').html(cleanTranslatedText);
+                                        const translatedHasHTML = $translatedDiv.children().length > 0 || cleanTranslatedText !== $translatedDiv.text();
+                                        
+                                        if (translatedHasHTML) {
+                                            // If translated has HTML, we need to be careful
+                                            // Extract just the text content from translated HTML
+                                            const translatedTextOnly = $translatedDiv.text();
+                                            $elem.text(translatedTextOnly);
+                                        } else {
+                                            // Plain text - use text() to preserve existing HTML structure
+                                            $elem.text(cleanTranslatedText);
+                                        }
+                                        replaced = true;
+                                    }
+                                }
+                            });
+                            
+                            if (replaced) {
+                                return tempDiv.html();
+                            } else {
+                                // Fallback to replaceTextInHTML but strip HTML from translated text
+                                const $translatedDiv = $('<div>').html(cleanTranslatedText);
+                                const translatedTextOnly = $translatedDiv.text() || cleanTranslatedText;
+                                return replaceTextInHTML(content, originalText, translatedTextOnly);
+                            }
+                        }
+                        
+                        return content;
                     }
                     return content;
                 });
@@ -1502,15 +1635,80 @@ jQuery(function ($) {
 
             translatedContent = JSON.stringify(translatedBlocks);
         } else {
-            // Handle classic editor
-            const translatedContentParts = [];
+            // Handle classic editor - preserve HTML structure
+            const originalContent = $(SELECTORS.translationPopup).data('original-content') || '';
+            let updatedContent = originalContent;
+            const tempDiv = $('<div>').html(originalContent);
+            
+            // Replace each translation in the original content while preserving HTML structure
             Object.keys(translations).forEach(function(index) {
                 const translation = translations[index];
-                if (translation.text) {
-                    translatedContentParts.push(translation.text);
+                if (translation.item && translation.item.text && translation.text) {
+                    const originalText = translation.item.text.trim();
+                    let translatedText = translation.text;
+                    const originalHtml = translation.item.html || translation.item.text;
+                    
+                    // Check if we have HTML structure to match
+                    const hasOriginalHtml = originalHtml && /<[^>]+>/.test(originalHtml) && originalHtml !== originalText;
+                    
+                    if (hasOriginalHtml) {
+                        // Try to find element by HTML structure first
+                        let replaced = false;
+                        const normalizedOriginalHtml = originalHtml.replace(/\s+/g, ' ').trim();
+                        
+                        // Process from innermost to outermost to match leaf elements first
+                        const allElements = tempDiv.find('*').not('script, style, noscript, iframe, object, embed, svg').toArray().reverse();
+                        
+                        allElements.forEach(function(elem) {
+                            if (replaced) return;
+                            
+                            const $elem = $(elem);
+                            const elemText = $elem.text().trim();
+                            // Get outerHTML by cloning the element
+                            const elemHtml = $('<div>').append($elem.clone()).html();
+                            const normalizedElemHtml = elemHtml.replace(/\s+/g, ' ').trim();
+                            
+                            // Match by HTML structure if available
+                            if (normalizedElemHtml === normalizedOriginalHtml && elemText === originalText) {
+                                // Check if translated text contains HTML
+                                const $translatedDiv = $('<div>').html(translatedText);
+                                const translatedHasHTML = $translatedDiv.children().length > 0 || translatedText !== $translatedDiv.text();
+                                
+                                if (translatedHasHTML) {
+                                    // Replace with translated HTML structure
+                                    $elem.replaceWith(translatedText);
+                                } else {
+                                    // Plain text - replace element's content but preserve structure
+                                    $elem.html(translatedText);
+                                }
+                                replaced = true;
+                            }
+                        });
+                        
+                        if (!replaced) {
+                            // Fallback to text-based replacement
+                            updatedContent = replaceTextInHTML(updatedContent, originalText, translatedText);
+                            tempDiv.html(updatedContent);
+                        }
+                    } else {
+                        // No HTML structure, use text-based replacement
+                        // If translated text contains HTML, extract just the text
+                        const $translatedDiv = $('<div>').html(translatedText);
+                        const translatedHasHTML = $translatedDiv.children().length > 0 || translatedText !== $translatedDiv.text();
+                        
+                        if (translatedHasHTML) {
+                            // Extract just the text content, preserving the HTML structure of the original
+                            translatedText = $translatedDiv.text();
+                        }
+                        
+                        updatedContent = replaceTextInHTML(updatedContent, originalText, translatedText);
+                        tempDiv.html(updatedContent);
+                    }
                 }
             });
-            translatedContent = translatedContentParts.join('\n\n');
+            
+            // Get final content from tempDiv
+            translatedContent = tempDiv.html();
         }
 
         if (!translatedTitle && !translatedContent) {
